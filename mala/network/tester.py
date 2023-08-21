@@ -168,6 +168,21 @@ class Tester(Runner):
         return self.\
             _forward_entire_snapshot(offset_snapshots+snapshot_number,
                                      data_set,
+#=======
+       # offset_snapshots = 0
+       # if data_type == 'va': 
+       #     offset_snapshots += self.data.nr_training_snapshots
+       # elif data_type == 'te':
+       #     offset_snapshots = self.data.nr_validation_snapshots + \
+       #                        self.data.nr_training_snapshots
+       # data_sets = {'tr': self.data.training_data_set,
+       #              'va': self.data.validation_data_set,
+       #              'te': self.data.test_data_set}
+       # 
+       # return self.\
+       #     _forward_entire_snapshot(offset_snapshots+snapshot_number,
+       #                              data_sets[data_type],
+#>>>>>>> active_learning
                                      data_type,
                                      self.number_of_batches_per_snapshot,
                                      self.parameters.mini_batch_size)

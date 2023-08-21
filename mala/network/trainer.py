@@ -282,6 +282,7 @@ class Trainer(Runner):
                 torch.cuda.synchronize()
                 tsample = time.time()
                 t0 = time.time()
+#<<<<<<< HEAD
                 batchid = 0
                 for loader in self.training_data_loaders:
                     for (inputs, outputs) in loader:
@@ -319,6 +320,46 @@ class Trainer(Runner):
                                      min_verbosity=2)
                             tsample = time.time()
                         batchid += 1
+#=======
+#                for batchid, (inputs, outputs) in \
+#                        enumerate(self.training_data_loader):
+#
+#                    if batchid == self.parameters.profiler_range[0]:
+#                        torch.cuda.profiler.start()
+#                    if batchid == self.parameters.profiler_range[1]:
+#                        torch.cuda.profiler.stop()
+#
+#                    torch.cuda.nvtx.range_push(f"step {batchid}")
+#
+#                    torch.cuda.nvtx.range_push("data copy in")
+#                    inputs = inputs.to(self.parameters._configuration["device"],
+#                                       non_blocking=True)
+#                    outputs = outputs.to(self.parameters._configuration["device"],
+#                                         non_blocking=True)
+#                    # data copy in
+#                    torch.cuda.nvtx.range_pop()
+#
+#                    ### DEBUG - check data
+#                    #printout(f'DDDD ing_data_set - prepare_to_train:\n{self.data.training_data_set} ')
+#
+#                    loss = self.__process_mini_batch(self.network,
+#                                                     inputs,
+#                                                     outputs)
+#                    # step
+#                    torch.cuda.nvtx.range_pop()
+#                    training_loss_sum += loss
+#
+#                    if batchid != 0 and (batchid + 1) % self.parameters.training_report_frequency == 0:
+#                        torch.cuda.synchronize()
+#                        sample_time = time.time() - tsample
+#                        avg_sample_time = sample_time / self.parameters.training_report_frequency
+#                        avg_sample_tput = self.parameters.training_report_frequency * inputs.shape[0] / sample_time
+#                        printout(f"batch {batchid + 1}/{len(self.training_data_loader)}, "
+#                                 f"train avg time: {avg_sample_time} "
+#                                 f"train avg throughput: {avg_sample_tput}",
+#                                 min_verbosity=2)
+#                        tsample = time.time()
+#>>>>>>> active_learning
                 torch.cuda.synchronize()
                 t1 = time.time()
                 printout(f"training time: {t1 - t0}", min_verbosity=2)
@@ -633,6 +674,11 @@ class Trainer(Runner):
 
     def __process_mini_batch(self, network, input_data, target_data):
         """Process a mini batch."""
+            
+        ### DEBUG
+        #printout(f'DDDD input_data: \n {input_data[:,0]}')
+        #printout(f'DDDD input_data sum: {torch.sum(input_data)}')
+ 
         if self.parameters._configuration["gpu"]:
             if self.parameters.use_graphs and self.train_graph is None:
                 printout("Capturing CUDA graph for training.", min_verbosity=2)

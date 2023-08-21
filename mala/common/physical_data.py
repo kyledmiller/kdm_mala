@@ -67,7 +67,7 @@ class PhysicalData(ABC):
     #   because there is no need to.
     ##############################
 
-    def read_from_numpy_file(self, path, units=None, array=None, reshape=False):
+    def read_from_numpy_file(self, path, units=None, array=None, reshape=False, selection_mask=None):
         """
         Read the data from a numpy file.
 
@@ -83,6 +83,10 @@ class PhysicalData(ABC):
             If not None, the array to save the data into.
             The array has to be 4-dimensional.
 
+        selection_mask : None or [boolean]
+            If None, entire snapshot is loaded, else it is used as a
+            mask to select which examples are loaded
+
         Returns
         -------
         data : numpy.ndarray or None
@@ -92,17 +96,46 @@ class PhysicalData(ABC):
 
         """
         if array is None:
+            print(f'\nno prealloc')
             loaded_array = np.load(path)[:, :, :, self._feature_mask():]
+            print(f'actual array_dims = {loaded_array.shape}')
             self._process_loaded_array(loaded_array, units=units)
-            return loaded_array
+            # Select portion of array if mask provided
+            if selection_mask is not None:
+                original_dims = loaded_array.shape 
+                # Pseudo-flatten to apply mask without causing dimensionality mismatch later on
+                loaded_array = loaded_array.reshape((-1, 1, 1, original_dims[-1]))[selection_mask] 
+                print(f'post-mask array_dims = {loaded_array.shape}')
+                return loaded_array
+            else:    
+                return loaded_array
         else:
             if reshape:
+                print(f'\nreshape')
+                print(type(selection_mask))
                 array_dims = np.shape(array)
-                array[:, :] = np.load(path)[:, :, :, self._feature_mask() :].reshape(
-                    array_dims
-                )
+                print(f'prealloc array_dims = {array_dims}')
+                if selection_mask is not None: 
+                    print(f'sel_mask = {len(selection_mask)}')
+                    print(f'actual array_dims = {np.load(path).shape}')
+                    array[:, :] = np.load(path)[:, :, :, self._feature_mask() :].reshape(
+                        (len(selection_mask),-1))[selection_mask]
+                    print(f'post-mask array_dims = {array.shape}')
+                else:    
+                    array[:, :] = np.load(path)[:, :, :, self._feature_mask() :].reshape(
+                        array_dims)
             else:
+                print(f'\nno reshape')
+                array_dims = np.shape(array)
+                print(f'prealloc array_dims = {array_dims}')
                 array[:, :, :, :] = np.load(path)[:, :, :, self._feature_mask() :]
+                print(f'full array_dims = {array.shape}')
+                # Select portion of array if mask provided
+                if selection_mask is not None:
+                    original_dims = loaded_array.shape 
+                    # Pseudo-flatten to apply mask without causing dimensionality mismatch later on
+                    array = array.reshape((-1, 1, 1, original_dims[-1]))[selection_mask]
+                print(f'post-mask array_dims = {array.shape}')
             self._process_loaded_array(array, units=units)
 
     def read_from_openpmd_file(self, path, units=None, array=None):
@@ -218,7 +251,7 @@ class PhysicalData(ABC):
         else:
             self._process_loaded_array(array, units=units)
 
-    def read_dimensions_from_numpy_file(self, path, read_dtype=False):
+    def read_dimensions_from_numpy_file(self, path, read_dtype=False, selection_mask=None):
         """
         Read only the dimensions from a numpy file.
 
@@ -230,7 +263,10 @@ class PhysicalData(ABC):
         read_dtype : bool
             If True, the dtype is read alongside the dimensions.
         """
-        loaded_array = np.load(path, mmap_mode="r")
+        loaded_array = np.load(path, mmap_mode="r+")
+        if selection_mask is not None:
+            original_dims = loaded_array.shape
+            loaded_array = loaded_array.reshape((-1, 1, 1, original_dims[-1]))[selection_mask]
         if read_dtype:
             return self._process_loaded_dimensions(np.shape(loaded_array)), \
                    loaded_array.dtype

@@ -13,14 +13,17 @@ from torch.utils.data import TensorDataset
 from mala.common.parallelizer import printout, barrier
 from mala.common.parameters import Parameters, DEFAULT_NP_DATA_DTYPE
 from mala.datahandling.data_handler_base import DataHandlerBase
+from mala.common.parameters import Parameters, ParametersData
 from mala.datahandling.data_scaler import DataScaler
 from mala.datahandling.snapshot import Snapshot
 from mala.datahandling.lazy_load_dataset import LazyLoadDataset
 from mala.datahandling.lazy_load_dataset_single import LazyLoadDatasetSingle
 from mala.datahandling.fast_tensor_dataset import FastTensorDataset
+import time
 
+from pprint import pprint
 
-class DataHandler(DataHandlerBase):
+class DataHandler:
     """
     Loads and scales data. Can only process numpy arrays at the moment.
 
@@ -30,8 +33,6 @@ class DataHandler(DataHandlerBase):
     Parameters
     ----------
     parameters : mala.common.parameters.Parameters
-        Parameters used to create the data handling object.
-
     descriptor_calculator : mala.descriptors.descriptor.Descriptor
         Used to do unit conversion on input data. If None, then one will
         be created by this class.
@@ -77,6 +78,16 @@ class DataHandler(DataHandlerBase):
                 = DataScaler(self.parameters.output_rescaling_type,
                              use_horovod=self.use_horovod)
 
+        # Dimensionalities of data.
+        self.input_dimension = 0
+        self.output_dimension = 0
+        self.nr_snapshots = 0
+
+        # clustering still needs uniform grids
+        if self.parameters.use_clustering:
+            self.grid_dimension = [0, 0, 0]
+            self.grid_size = 0
+
         # Actual data points in the different categories.
         self.nr_training_data = 0
         self.nr_test_data = 0
@@ -104,11 +115,91 @@ class DataHandler(DataHandlerBase):
             self.clear_data()
 
     ##############################
+    # Properties
+    ##############################
+
+    @property
+    def input_dimension(self):
+        """Feature dimension of input data."""
+        return self._input_dimension
+
+    @input_dimension.setter
+    def input_dimension(self, new_dimension):
+        self._input_dimension = new_dimension
+
+    @property
+    def output_dimension(self):
+        """Feature dimension of output data."""
+        return self._output_dimension
+
+    @output_dimension.setter
+    def output_dimension(self, new_dimension):
+        self._output_dimension = new_dimension
+
+    ##############################
     # Public methods
     ##############################
 
     # Adding/Deleting data
-    ########################
+    ######################        
+
+    def add_snapshot(self, input_npy_file, input_npy_directory,
+                     output_npy_file, output_npy_directory, add_snapshot_as,
+                     output_units="1/(eV*A^3)", input_units="None",
+                     calculation_output_file="", snapshot_type="numpy",
+                     selection_mask=None):
+        """
+        Add a snapshot to the data pipeline.
+
+        Parameters
+        ----------
+        input_npy_file : string
+            File with saved numpy input array.
+
+        input_npy_directory : string
+            Directory containing input_npy_directory.
+
+        output_npy_file : string
+            File with saved numpy output array.
+
+        output_npy_directory : string
+            Directory containing output_npy_file.
+
+        input_units : string
+            Units of input data. See descriptor classes to see which units are
+            supported.
+
+        output_units : string
+            Units of output data. See target classes to see which units are
+            supported.
+
+        calculation_output_file : string
+            File with the output of the original snapshot calculation. This is
+            only needed when testing multiple snapshots.
+
+        add_snapshot_as : string
+            Must be "tr", "va" or "te", the snapshot will be added to the
+            snapshot list as training, validation or testing snapshot,
+            respectively.
+
+        snapshot_type : string
+            Either "numpy" or "openpmd" based on what kind of files you
+            want to operate on.
+
+        selection_mask : None or [boolean]
+            If None, entire snapshot is loaded, if [boolean], it is used as a
+            mask to select which examples are loaded
+        """
+        if selection_mask is not None and self.parameters.use_lazy_loading:
+            raise NotImplementedError("Example selection hasn't been implemented for lazy loading yet.") 
+        snapshot = Snapshot(input_npy_file, input_npy_directory,
+                            output_npy_file, output_npy_directory,
+                            add_snapshot_as,
+                            input_units=input_units,
+                            output_units=output_units,
+                            calculation_output=calculation_output_file,
+                            snapshot_type=snapshot_type, selection_mask=selection_mask)
+        self.parameters.snapshot_directories_list.append(snapshot)
 
     def clear_data(self):
         """
@@ -125,12 +216,12 @@ class DataHandler(DataHandlerBase):
         self.nr_training_snapshots = 0
         self.nr_test_snapshots = 0
         self.nr_validation_snapshots = 0
-        super(DataHandler, self).clear_data()
+        self.parameters.snapshot_directories_list = []
 
     # Preparing data
     ######################
 
-    def prepare_data(self, reparametrize_scaler=True):
+    def prepare_data(self, reparametrize_scaler=True, from_arrays_dict=None):
         """
         Prepare the data to be used in a training process.
 
@@ -146,6 +237,14 @@ class DataHandler(DataHandlerBase):
             If True (default), the DataScalers are parametrized based on the
             training data.
 
+        from_arrays_dict : dict or None
+            (Allows user to provide data directly from memory)
+            Dictionary which assigns an array (values) to each snapshot, e.g.,
+            {(0,'inputs') : fp_array, (0, 'outputs') : ldos_array, ...} where 0
+            is the index of the snapshot (absolute, not relative to data
+            partition) and inputs/outputs indicates the nature of the array.         
+            None value indicates the data should be pulled from disk according
+            to the snapshot objects.
         """
         # During data loading, there is no need to save target data to
         # calculators.
@@ -159,7 +258,7 @@ class DataHandler(DataHandlerBase):
         # an exception.
         printout("Checking the snapshots and your inputs for consistency.",
                  min_verbosity=1)
-        self._check_snapshots()
+        self.__check_snapshots(from_arrays_dict=from_arrays_dict)
         printout("Consistency check successful.", min_verbosity=0)
 
         # If the DataHandler is used for inference, i.e. no training or
@@ -177,22 +276,139 @@ class DataHandler(DataHandlerBase):
         # Parametrize the scalers, if needed.
         if reparametrize_scaler:
             printout("Initializing the data scalers.", min_verbosity=1)
-            self.__parametrize_scalers()
+            self.__parametrize_scalers(from_arrays_dict=from_arrays_dict)
             printout("Data scalers initialized.", min_verbosity=0)
         elif self.parameters.use_lazy_loading is False and \
                 self.nr_training_data != 0:
             printout("Data scalers already initilized, loading data to RAM.",
                      min_verbosity=0)
-            self.__load_data("training", "inputs")
-            self.__load_data("training", "outputs")
+            self.__load_data("training", "inputs",  from_arrays_dict=from_arrays_dict)
+            self.__load_data("training", "outputs", from_arrays_dict=from_arrays_dict)
 
-        # Build Datasets.
+        # Build Datasets
         printout("Build datasets.", min_verbosity=1)
-        self.__build_datasets()
+        self.__build_datasets(from_arrays_dict=from_arrays_dict)
         printout("Build dataset: Done.", min_verbosity=0)
 
         # After the loading is done, target data can safely be saved again.
         self.target_calculator.save_target_data = True
+        
+        # Wait until all ranks are finished with data preparation.
+        # It is not uncommon that ranks might be asynchronous in their
+        # data preparation by a small amount of minutes. If you notice
+        # an elongated wait time at this barrier, check that your file system
+        # allows for parallel I/O.
+        barrier()
+
+
+    def refresh_data(self, from_arrays_dict=None, partitions=['tr','va','te']):
+        """
+        Replace tr, va, te data for next generation of active learning.
+
+
+        Parameters
+        ----------
+
+        from_arrays_dict : dict or None
+            (Allows user to provide data directly from memory)
+            Dictionary which assigns an array (values) to each snapshot, e.g.,
+            {(0,'inputs') : fp_array, (0, 'outputs') : ldos_array, ...} where 0
+            is the index of the snapshot (absolute, not relative to data
+            partition) and inputs/outputs indicates the nature of the array.         
+            None value indicates the data should be pulled from disk according
+            to the snapshot objects.
+
+        partitions: list
+            Specifies the partitions for which to reload data
+        """
+        # During data loading, there is no need to save target data to
+        # calculators.
+        # Technically, this would be no issue, but due to technical reasons
+        # (i.e. float64 to float32 conversion) saving the data this way
+        # may create copies in memory.
+        self.target_calculator.save_target_data = False
+        
+         
+        # Reallocate arrays for data storage
+        start = time.time()
+        if self.parameters.data_splitting_type == "by_snapshot":
+            self.nr_training_snapshots, self.nr_training_data, \
+            self.nr_test_snapshots, self.nr_test_data, \
+            self.nr_validation_snapshots, self.nr_validation_data \
+            = 0, 0, 0, 0, 0, 0 
+            #pprint(vars(self))
+            #pprint(vars(self.parameters))
+            snapshot: Snapshot
+            # As we are not actually interested in the number of snapshots,
+            # but in the number of datasets, we also need to multiply by that.
+
+            for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
+                print(f'Snapshot {i}: {snapshot.grid_size}')
+                if snapshot.snapshot_function == "tr":
+                    self.nr_training_snapshots += 1
+                    self.nr_training_data += snapshot.grid_size
+                elif snapshot.snapshot_function == "te":
+                    self.nr_test_snapshots += 1
+                    self.nr_test_data += snapshot.grid_size
+                elif snapshot.snapshot_function == "va":
+                    self.nr_validation_snapshots += 1
+                    self.nr_validation_data += snapshot.grid_size
+                else:
+                    raise Exception("Unknown option for snapshot splitting "
+                                    "selected.")
+
+            # Now we need to check whether or not this input is believable.
+            nr_of_snapshots = len(self.parameters.snapshot_directories_list)
+            if nr_of_snapshots != (self.nr_training_snapshots +
+                                   self.nr_test_snapshots +
+                                   self.nr_validation_snapshots):
+                raise Exception("Cannot split snapshots with specified "
+                                "splitting scheme, "
+                                "too few or too many options selected: "
+                                f"[{nr_of_snapshots} != {self.nr_training_snapshots} + {self.nr_test_snapshots} + {self.nr_validation_snapshots}]")
+
+            # MALA can either be run in training or test-only mode.
+            # But it has to be run in either of those!
+            # So either training AND validation snapshots can be provided
+            # OR only test snapshots.
+            if self.nr_test_snapshots != 0:
+                if self.nr_training_snapshots == 0:
+                    printout("DataHandler prepared for inference. No training "
+                             "possible with this setup. If this is not what "
+                             "you wanted, please revise the input script. "
+                             "Validation snapshots you may have entered will"
+                             "be ignored.",
+                             min_verbosity=0)
+            else:
+                if self.nr_training_snapshots == 0:
+                    raise Exception("No training snapshots provided.")
+                if self.nr_validation_snapshots == 0:
+                    raise Exception("No validation snapshots provided.")
+        else:
+            raise Exception("Wrong parameter for data splitting provided.")
+
+        self.__allocate_arrays()
+        printout(f'ttt allocate:                         {time.time()-start}s')
+    
+        ### Load updated data
+        start = time.time()
+        expand_partition_name = {'tr':'training', 
+                                 'va':'validation', 
+                                 'te':'test'}
+        for partition in partitions:
+            self.__load_data(expand_partition_name[partition], "inputs", 
+                             from_arrays_dict=from_arrays_dict)
+            self.__load_data(expand_partition_name[partition], "outputs", 
+                             from_arrays_dict=from_arrays_dict)
+        printout(f'ttt refresh:                          {time.time()-start}s')
+
+        # After the loading is done, target data can safely be saved again.
+        self.target_calculator.save_target_data = True
+
+        printout("Build datasets.", min_verbosity=1)
+        self.__build_datasets(from_arrays_dict=from_arrays_dict)
+        printout("Build dataset: Done.", min_verbosity=0)
+        printout(f'ttt build_dataset:                    {time.time()-start}s')
 
         # Wait until all ranks are finished with data preparation.
         # It is not uncommon that ranks might be asynchronous in their
@@ -381,17 +597,118 @@ class DataHandler(DataHandlerBase):
     # Loading data
     ######################
 
-    def _check_snapshots(self):
+    def __check_snapshots(self, from_arrays_dict=None):
         """Check the snapshots for consistency."""
-        super(DataHandler, self)._check_snapshots()
+        self.nr_snapshots = len(self.parameters.snapshot_directories_list)
+
+        # Read the snapshots using a memorymap to see if there is consistency.
+        firstsnapshot = True
+        for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
+            ####################
+            # Descriptors.
+            ####################            
+
+            printout("Checking descriptor file ", snapshot.input_npy_file,
+                     "at", snapshot.input_npy_directory, min_verbosity=1)
+            if from_arrays_dict is not None:
+                print(f'arrdim:   {from_arrays_dict[(i, "inputs")].shape}')
+                print(f'featmask: {self.descriptor_calculator._feature_mask()}')
+                tmp_dimension = from_arrays_dict[(i, 'inputs')]\
+                    [:,self.descriptor_calculator._feature_mask():].shape
+                # We don't need any reference to full grid dim at this point
+                # so this is just for compatibility w other code
+                if len(tmp_dimension) > 2: 
+                    raise ValueError('Flatten the data pool arrays.')
+                tmp_dimension = (tmp_dimension[0], 1, 1, tmp_dimension[-1])
+                printout(f"from_arrays_dict dim {i}: {from_arrays_dict[(i, 'inputs')].shape}")
+            elif snapshot.snapshot_type == "numpy":
+                tmp_dimension = self.descriptor_calculator.\
+                    read_dimensions_from_numpy_file(
+                    os.path.join(snapshot.input_npy_directory,
+                                 snapshot.input_npy_file))#, 
+                    #selection_mask=snapshot._selection_mask)
+            elif snapshot.snapshot_type == "openpmd":
+                tmp_dimension = self.descriptor_calculator.\
+                    read_dimensions_from_openpmd_file(
+                    os.path.join(snapshot.input_npy_directory,
+                                 snapshot.input_npy_file))
+            else:
+                raise Exception("Unknown snapshot file type.")
+            
+            # get the snapshot feature dimension - call it input dimension
+            # for flexible grid sizes only this need be consistent
+            tmp_input_dimension = tmp_dimension[-1]
+            tmp_grid_dim = tmp_dimension[0:3]
+            
+            # If using selection_mask, apply to dimensions 
+            if snapshot._selection_mask is not None:
+                tmp_grid_dim = (sum(snapshot._selection_mask),1,1)
+            
+            print(f'tmp_input_dim {i}: {tmp_input_dimension}')
+            print(f'tmp_grid_dim {i}:  {tmp_grid_dim}')
+            snapshot.grid_dimension = tmp_grid_dim
+            snapshot.grid_size = int(np.prod(tmp_grid_dim))            
+            printout(f'grid_size: {snapshot.grid_size}')
+            if firstsnapshot:
+                self.input_dimension = tmp_input_dimension
+                if self.parameters.use_clustering:
+                    self.grid_dimension[0:3] = tmp_grid_dim[0:3]
+                    self.grid_size = np.prod(self.grid_dimension)
+            else:
+                if self.input_dimension != tmp_input_dimension:
+                    raise Exception("Invalid snapshot entered at ", snapshot.
+                                    input_npy_file)
+            ####################
+            # Targets.
+            ####################
+
+            printout("Checking targets file ", snapshot.output_npy_file, "at",
+                     snapshot.output_npy_directory, min_verbosity=1)
+            if from_arrays_dict is not None:
+                tmp_dimension = from_arrays_dict[(i, 'outputs')]\
+                    [:,self.target_calculator._feature_mask():].shape
+                # We don't need any reference to full grid dim at this point
+                # so this is just for compatibility w other code
+                if len(tmp_dimension) > 2: 
+                    raise ValueError('Flatten the data pool arrays.')
+                tmp_dimension = (tmp_dimension[0], 1, 1, tmp_dimension[-1])
+            elif snapshot.snapshot_type == "numpy":
+                tmp_dimension = self.target_calculator.\
+                    read_dimensions_from_numpy_file(
+                    os.path.join(snapshot.output_npy_directory,
+                                 snapshot.output_npy_file))#,
+                    #selection_mask=snapshot._selection_mask)
+            elif snapshot.snapshot_type == "openpmd":
+                tmp_dimension = self.target_calculator.\
+                    read_dimensions_from_openpmd_file(
+                    os.path.join(snapshot.output_npy_directory,
+                                 snapshot.output_npy_file))
+            else:
+                raise Exception("Unknown snapshot file type.")
+
+            # The first snapshot determines the data size to be used.
+            # We need to make sure that snapshot size is consistent.
+            tmp_output_dimension = tmp_dimension[-1]
+            if firstsnapshot:
+                self.output_dimension = tmp_output_dimension
+            else:
+                if self.output_dimension != tmp_output_dimension:
+                    raise Exception("Invalid snapshot entered at ", snapshot.
+                                    output_npy_file)
+                
+            if firstsnapshot:
+                firstsnapshot = False                
 
         # Now we need to confirm that the snapshot list has some inner
         # consistency.
         if self.parameters.data_splitting_type == "by_snapshot":
+            #pprint(vars(self))
+            #pprint(vars(self.parameters))
             snapshot: Snapshot
             # As we are not actually interested in the number of snapshots,
             # but in the number of datasets, we also need to multiply by that.
             for snapshot in self.parameters.snapshot_directories_list:
+                print(snapshot.snapshot_function)
                 if snapshot.snapshot_function == "tr":
                     self.nr_training_snapshots += 1
                     self.nr_training_data += snapshot.grid_size
@@ -412,7 +729,8 @@ class DataHandler(DataHandlerBase):
                                    self.nr_validation_snapshots):
                 raise Exception("Cannot split snapshots with specified "
                                 "splitting scheme, "
-                                "too few or too many options selected")
+                                "too few or too many options selected: "
+                                f"[{nr_of_snapshots} != {self.nr_training_snapshots} + {self.nr_test_snapshots} + {self.nr_validation_snapshots}]")
             # MALA can either be run in training or test-only mode.
             # But it has to be run in either of those!
             # So either training AND validation snapshots can be provided
@@ -467,7 +785,7 @@ class DataHandler(DataHandlerBase):
                                                self.output_dimension),
                                               dtype=DEFAULT_NP_DATA_DTYPE)
 
-    def __load_data(self, function, data_type):
+    def __load_data(self, function, data_type, from_arrays_dict=None):
         """
         Load data into the appropriate arrays.
 
@@ -480,12 +798,13 @@ class DataHandler(DataHandlerBase):
         data_type : string
             Can be "input" or "output".
         """
+        start = time.time()
+
         if function != "training" and function != "test" and \
                 function != "validation":
             raise Exception("Unknown snapshot type detected.")
         if data_type != "outputs" and data_type != "inputs":
             raise Exception("Unknown data type detected.")
-
         # Extracting all the information pertaining to the data set.
         array = function+"_data_"+data_type
         if data_type == "inputs":
@@ -498,7 +817,12 @@ class DataHandler(DataHandlerBase):
 
         snapshot_counter = 0
         gs_old = 0
-        for snapshot in self.parameters.snapshot_directories_list:
+
+        print(f'ttt load_data_{function} 0 initialize:   {time.time() - start}')
+
+        for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
+            mid = time.time()
+
             # get the snapshot grid size
             gs_new = snapshot.grid_size
 
@@ -513,17 +837,77 @@ class DataHandler(DataHandlerBase):
                                         snapshot.output_npy_file)
                     units = snapshot.output_units
 
-                if snapshot.snapshot_type == "numpy":
+                # Pull from existing array rather than file
+                if from_arrays_dict is not None:
+                    if snapshot._selection_mask is not None: gs_new = sum(snapshot._selection_mask)
+                    print(f'gs_new {i}: {gs_new}')
+                    print(f'Fastloaded {i}, {data_type}: {from_arrays_dict[(i, data_type)].shape}')# -  {from_arrays_dict[(i, data_type)]}')
+                    print(f'selmask -> {gs_new}')
+                    print(f'indices: {gs_old}:{gs_old+gs_new} in {getattr(self,array).shape}')
+                    #print(f'units = {units}')
+                    #arr0 = from_arrays_dict[(i, data_type)]
+                    #print(f'arr0 {arr0.shape}')#:  {arr0}')
+                    #arr1 = from_arrays_dict[(i, data_type)][:, calculator._feature_mask():]
+                    #print(f'arr1 {arr1.shape}')#:  {arr1}')
+                    #if snapshot._selection_mask is not None:
+                    #    arr2 = from_arrays_dict[(i, data_type)][:, calculator._feature_mask():][snapshot._selection_mask]
+                    #    print(f'arr2 {arr2.shape}')#:  {arr1}')
+                    #    del arr2
+                    #del arr0, arr1
+                    #calculator._process_loaded_array(from_arrays_dict[i][:, :, :, calculator._feature_mask():][snapshot._selection_mask], units=units)
+                    #print(f'arr2 {arr1.shape}:  {arr1}')
+
+                    #TODO streamline this
+                    if snapshot._selection_mask is not None:
+                        # Update data already in tensor form
+                        if torch.is_tensor(getattr(self, array)): 
+                            getattr(self, array)[gs_old : gs_old + gs_new, :] =\
+                                torch.from_numpy(from_arrays_dict[(i, data_type)]\
+                                [:, calculator._feature_mask():]\
+                                [snapshot._selection_mask])
+
+                        # Update a fresh numpy array
+                        else:        
+                            getattr(self, array)[gs_old : gs_old + gs_new, :] =\
+                                from_arrays_dict[(i, data_type)]\
+                                [:, calculator._feature_mask():]\
+                                [snapshot._selection_mask]
+                    else:
+                        # Update data already in tensor form
+                        if torch.is_tensor(getattr(self, array)): 
+                            getattr(self, array)[gs_old : gs_old + gs_new, :] =\
+                                torch.from_numpy(from_arrays_dict[(i, data_type)]\
+                                [:, calculator._feature_mask():])
+                        # Update a fresh numpy array
+                        else:        
+                            getattr(self, array)[gs_old : gs_old + gs_new, :] =\
+                                from_arrays_dict[(i, data_type)]\
+                                [:, calculator._feature_mask():]
+
+
+                    print(f'ttt load_data 1 existing_assign:                   {time.time() - mid}')
+                    mid = time.time()
+
+                    calculator._process_loaded_array(getattr(self,array)[gs_old : gs_old + gs_new, :], units=units)
+                    
+                    print(f'ttt load_data 2 existing_process:                  {time.time() - mid}')
+                    mid = time.time()
+
+                    #print(f'Fastloaded: {getattr(self,array)[gs_old : gs_old + gs_new, :].shape} {getattr(self,array)[gs_old : gs_old + gs_new, :]}')
+
+                # Pull directly from file
+                elif snapshot.snapshot_type == "numpy":
                     calculator.read_from_numpy_file(
                         file,
                         units=units,
                         array=getattr(self, array)[gs_old : gs_old + gs_new, :],
-                        reshape=True,
+                        reshape=True, selection_mask=snapshot._selection_mask
                     )
                 elif snapshot.snapshot_type == "openpmd":
+                    if snapshot._selection_mask is not None: raise NotImplementedError('Selection mask is not implemented for openpmd')
                     getattr(self, array)[gs_old : gs_old + gs_new] = \
                         calculator.read_from_openpmd_file(file, units=units) \
-                        .reshape([gs_new, feature_dimension])
+                        .reshape([gs_new, feature_dimensions])
                 else:
                     raise Exception("Unknown snapshot file type.")
                 snapshot_counter += 1
@@ -536,34 +920,38 @@ class DataHandler(DataHandlerBase):
         # test/tensor_memory.py
         # Also, the following bit does not work with getattr, so I had to
         # hard code it. If someone has a smart idea to circumvent this, I am
-        # all ears.
-        if data_type == "inputs":
-            if function == "training":
-                self.training_data_inputs = torch.\
-                    from_numpy(self.training_data_inputs).float()
+        # all ears
+        if not torch.is_tensor(getattr(self, array)): 
+            if data_type == "inputs":
+                if function == "training":
+                    self.training_data_inputs = torch.\
+                        from_numpy(self.training_data_inputs).float()
 
-            if function == "validation":
-                self.validation_data_inputs = torch.\
-                    from_numpy(self.validation_data_inputs).float()
+                if function == "validation":
+                    self.validation_data_inputs = torch.\
+                        from_numpy(self.validation_data_inputs).float()
 
-            if function == "test":
-                self.test_data_inputs = torch.\
-                    from_numpy(self.test_data_inputs).float()
+                if function == "test":
+                    self.test_data_inputs = torch.\
+                        from_numpy(self.test_data_inputs).float()
 
-        if data_type == "outputs":
-            if function == "training":
-                self.training_data_outputs = torch.\
-                    from_numpy(self.training_data_outputs).float()
+            if data_type == "outputs":
+                if function == "training":
+                    self.training_data_outputs = torch.\
+                        from_numpy(self.training_data_outputs).float()
 
-            if function == "validation":
-                self.validation_data_outputs = torch.\
-                    from_numpy(self.validation_data_outputs).float()
+                if function == "validation":
+                    self.validation_data_outputs = torch.\
+                        from_numpy(self.validation_data_outputs).float()
 
-            if function == "test":
-                self.test_data_outputs = torch.\
-                    from_numpy(self.test_data_outputs).float()
+                if function == "test":
+                    self.test_data_outputs = torch.\
+                        from_numpy(self.test_data_outputs).float()
+
+            print(f'ttt load_data 3 existing_tensorize:      {time.time() - mid}')
+            print(f'tttt load_data 4 total:                  {time.time() - start}')
                 
-    def __build_datasets(self):
+    def __build_datasets(self, from_arrays_dict=None):
         """Build the DataSets that are used during training."""
         if self.parameters.use_lazy_loading and not self.parameters.use_lazy_loading_prefetch:
 
@@ -647,10 +1035,10 @@ class DataHandler(DataHandlerBase):
                                       self.training_data_outputs))
 
             if self.nr_validation_data != 0:
-                self.__load_data("validation", "inputs")
+                self.__load_data("validation", "inputs", from_arrays_dict=from_arrays_dict)
                 self.input_data_scaler.transform(self.validation_data_inputs)
 
-                self.__load_data("validation", "outputs")
+                self.__load_data("validation", "outputs", from_arrays_dict=from_arrays_dict)
                 self.output_data_scaler.transform(self.validation_data_outputs)
                 if self.parameters.use_fast_tensor_data_set:
                     printout("Using FastTensorDataset.", min_verbosity=2)
@@ -664,20 +1052,23 @@ class DataHandler(DataHandlerBase):
                                       self.validation_data_outputs))
 
             if self.nr_test_data != 0:
-                self.__load_data("test", "inputs")
+                self.__load_data("test", "inputs", from_arrays_dict=from_arrays_dict)
                 self.input_data_scaler.transform(self.test_data_inputs)
                 self.test_data_inputs.requires_grad = True
 
-                self.__load_data("test", "outputs")
+                self.__load_data("test", "outputs", from_arrays_dict=from_arrays_dict)
                 self.output_data_scaler.transform(self.test_data_outputs)
                 self.test_data_sets.append( \
                     TensorDataset(self.test_data_inputs,
                                   self.test_data_outputs))
+        printout(f'# training data:   {self.nr_training_data}',   min_verbosity=2)
+        printout(f'# validation data: {self.nr_validation_data}', min_verbosity=2)
+        printout(f'# testing data:    {self.nr_test_data}',       min_verbosity=2)
 
     # Scaling
     ######################
 
-    def __parametrize_scalers(self):
+    def __parametrize_scalers(self, from_arrays_dict=None):
         """Use the training data to parametrize the DataScalers."""
         ##################
         # Inputs.
@@ -700,7 +1091,8 @@ class DataHandler(DataHandlerBase):
                         tmp = self.descriptor_calculator. \
                             read_from_numpy_file(os.path.join(snapshot.input_npy_directory,
                                                               snapshot.input_npy_file),
-                                                 units=snapshot.input_units)
+                                                 units=snapshot.input_units, 
+                                                 selection_mask=snapshot._selection_mask)
                     elif snapshot.snapshot_type == "openpmd":
                         tmp = self.descriptor_calculator. \
                             read_from_openpmd_file(os.path.join(snapshot.input_npy_directory,
@@ -724,7 +1116,7 @@ class DataHandler(DataHandlerBase):
             self.input_data_scaler.finish_incremental_fitting()
 
         else:
-            self.__load_data("training", "inputs")
+            self.__load_data("training", "inputs", from_arrays_dict=from_arrays_dict)
             self.input_data_scaler.fit(self.training_data_inputs)
 
         printout("Input scaler parametrized.", min_verbosity=1)
@@ -746,6 +1138,8 @@ class DataHandler(DataHandlerBase):
             # We need to perform the data scaling over the entirety of the
             # training data.
             for snapshot in self.parameters.snapshot_directories_list:
+                if snapshot._selection_mask is not None:  
+                    raise NotImplementedError("Example selection hasn't been implemented for lazy loading yet.") 
                 # Data scaling is only performed on the training data sets.
                 if snapshot.snapshot_function == "tr":
                     if snapshot.snapshot_type == "numpy":
@@ -776,7 +1170,7 @@ class DataHandler(DataHandlerBase):
             self.output_data_scaler.finish_incremental_fitting()
 
         else:
-            self.__load_data("training", "outputs")
+            self.__load_data("training", "outputs", from_arrays_dict=from_arrays_dict)
             self.output_data_scaler.fit(self.training_data_outputs)
 
         printout("Output scaler parametrized.", min_verbosity=1)                

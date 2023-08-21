@@ -112,7 +112,7 @@ class Runner:
                     os.remove(os.path.join(save_path, file))
 
     @classmethod
-    def load_run(cls, run_name, path="./", zip_run=True,
+    def load_run(cls, run_name, path="./", zip_run=False,
                  params_format="json", load_runner=True,
                  prepare_data=False):
         """
@@ -217,7 +217,7 @@ class Runner:
             return loaded_params, loaded_network, new_datahandler
 
     @classmethod
-    def run_exists(cls, run_name, params_format="json", zip_run=True):
+    def run_exists(cls, run_name, params_format="json", zip_run=False):
         """
         Check if a run exists.
 
@@ -346,6 +346,8 @@ class Runner:
         new_batch_size = batchsize
         if datasize % new_batch_size != 0:
             while datasize % new_batch_size != 0:
+                if new_batch_size > datasize:
+                    new_batch_size = new_batch_size//2
                 new_batch_size += 1
         return new_batch_size
 
