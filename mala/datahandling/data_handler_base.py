@@ -47,11 +47,6 @@ class DataHandlerBase(ABC):
         self.output_dimension = 0
         self.nr_snapshots = 0
 
-        # Clustering still needs uniform grids
-        if self.parameters.use_clustering:
-            self.grid_dimension = [0, 0, 0]
-            self.grid_size = 0
-
     ##############################
     # Properties
     ##############################
@@ -148,7 +143,7 @@ class DataHandlerBase(ABC):
     # Loading data
     ######################
 
-    def _check_snapshots(self):
+    def _check_snapshots(self, comm=None):
         """Check the snapshots for consistency."""
         self.nr_snapshots = len(self.parameters.snapshot_directories_list)
 
@@ -170,7 +165,7 @@ class DataHandlerBase(ABC):
                 tmp_dimension = self.descriptor_calculator. \
                     read_dimensions_from_openpmd_file(
                     os.path.join(snapshot.input_npy_directory,
-                                 snapshot.input_npy_file))
+                                 snapshot.input_npy_file), comm=comm)
             else:
                 raise Exception("Unknown snapshot file type.")
 
@@ -182,9 +177,6 @@ class DataHandlerBase(ABC):
             snapshot.grid_size = int(np.prod(snapshot.grid_dimension))
             if firstsnapshot:
                 self.input_dimension = tmp_input_dimension
-                if self.parameters.use_clustering:
-                    self.grid_dimension[0:3] = tmp_grid_dim[0:3]
-                    self.grid_size = np.prod(self.grid_dimension)
             else:
                 if self.input_dimension != tmp_input_dimension:
                     raise Exception("Invalid snapshot entered at ", snapshot.
@@ -204,7 +196,7 @@ class DataHandlerBase(ABC):
                 tmp_dimension = self.target_calculator. \
                     read_dimensions_from_openpmd_file(
                     os.path.join(snapshot.output_npy_directory,
-                                 snapshot.output_npy_file))
+                                 snapshot.output_npy_file), comm=comm)
             else:
                 raise Exception("Unknown snapshot file type.")
 

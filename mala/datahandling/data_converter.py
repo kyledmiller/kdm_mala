@@ -197,7 +197,8 @@ class DataConverter:
                           naming_scheme="ELEM_snapshot*.npy", starts_at=0,
                           file_based_communication=False,
                           descriptor_calculation_kwargs=None,
-                          target_calculator_kwargs=None):
+                          target_calculator_kwargs=None,
+                          use_fp64=False):
         """
         Convert the snapshots in the list to numpy arrays.
 
@@ -243,6 +244,11 @@ class DataConverter:
         descriptor_calculation_kwargs : dict
             Dictionary with additional keyword arguments for the calculation
             or parsing of the descriptor quantities.
+
+        use_fp64 : bool
+            If True, data is saved with double precision. If False (default),
+            single precision (FP32) is used. This is advantageous, since
+            internally, torch models are constructed with FP32 anyway.
         """
         if "." in naming_scheme:
             file_ending = naming_scheme.split(".")[-1]
@@ -387,7 +393,8 @@ class DataConverter:
                                            use_memmap=memmap,
                                            input_iteration=input_iteration,
                                            output_iteration=output_iteration,
-                                           additional_info_path=info_path)
+                                           additional_info_path=info_path,
+                                           use_fp64=use_fp64)
 
             if get_rank() == 0:
                 if self.parameters._configuration["mpi"] \
@@ -402,14 +409,15 @@ class DataConverter:
                 del output_series
 
     def __convert_single_snapshot(self, snapshot_number,
-                                descriptor_calculation_kwargs,
-                                target_calculator_kwargs,
-                                input_path=None,
-                                output_path=None,
-                                additional_info_path=None,
-                                use_memmap=None,
-                                output_iteration=None,
-                                input_iteration=None):
+                                  descriptor_calculation_kwargs,
+                                  target_calculator_kwargs,
+                                  input_path=None,
+                                  output_path=None,
+                                  additional_info_path=None,
+                                  use_memmap=None,
+                                  output_iteration=None,
+                                  input_iteration=None,
+                                  use_fp64=False):
         """
         Convert single snapshot from the conversion lists.
 
@@ -451,6 +459,11 @@ class DataConverter:
             OpenPMD iteration to be used to save the input data of the current
             snapshot, as part of an OpenPMD Series.
 
+        use_fp64 : bool
+            If True, data is saved with double precision. If False (default),
+            single precision (FP32) is used. This is advantageous, since
+            internally, torch models are constructed with FP32 anyway.
+
         Returns
         -------
         inputs : numpy.array , optional
@@ -466,6 +479,8 @@ class DataConverter:
         # Parse and/or calculate the input descriptors.
         if description["input"] == "espresso-out":
             descriptor_calculation_kwargs["units"] = original_units["input"]
+            descriptor_calculation_kwargs["use_fp64"] = use_fp64
+
             tmp_input, local_size = self.descriptor_calculator. \
                 calculate_from_qe_out(snapshot["input"],
                                       **descriptor_calculation_kwargs)
@@ -487,11 +502,18 @@ class DataConverter:
                     self.descriptor_calculator.\
                         write_to_numpy_file(input_path, tmp_input)
             else:
-                tmp_input, local_offset, local_reach = \
-                    self.descriptor_calculator.convert_local_to_3d(tmp_input)
-                self.descriptor_calculator.\
-                    write_to_openpmd_iteration(input_iteration,
-                                               tmp_input, local_offset=local_offset, local_reach=local_reach)
+                if self.parameters._configuration["mpi"]:
+                    tmp_input, local_offset, local_reach = \
+                        self.descriptor_calculator.convert_local_to_3d(tmp_input)
+                    self.descriptor_calculator. \
+                        write_to_openpmd_iteration(input_iteration,
+                                                   tmp_input,
+                                                   local_offset=local_offset,
+                                                   local_reach=local_reach)
+                else:
+                    self.descriptor_calculator. \
+                        write_to_openpmd_iteration(input_iteration,
+                                                   tmp_input)
             del tmp_input
 
         ###########
@@ -505,6 +527,8 @@ class DataConverter:
                     target_calculator_kwargs["units"] = original_units[
                         "output"]
                     target_calculator_kwargs["use_memmap"] = use_memmap
+                    target_calculator_kwargs["use_fp64"] = use_fp64
+
                     # If no units are provided we just assume standard units.
                     tmp_output = self.target_calculator. \
                         read_from_cube(snapshot["output"],
@@ -514,6 +538,8 @@ class DataConverter:
                     target_calculator_kwargs["units"] = original_units[
                         "output"]
                     target_calculator_kwargs["use_memmap"] = use_memmap
+                    target_calculator_kwargs["use_fp664"] = use_fp64
+
                     # If no units are provided we just assume standard units.
                     tmp_output = self.target_calculator. \
                         read_from_xsf(snapshot["output"],

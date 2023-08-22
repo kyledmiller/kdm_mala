@@ -20,6 +20,12 @@ desired_std_ho = 0.1
 # Values for the ACSD.
 targeted_acsd_value = 0.04
 
+# For the NASWOT comparison
+# Since the values we are comparing here are dependent on the eigensolver
+# implementation and numerical noise effects, I think it is reasonable
+# to not require strict accuracy.
+naswot_accuracy = 0.01
+
 
 class TestHyperparameterOptimization:
     """Tests the basic hyperparameter optimization routines."""
@@ -182,6 +188,48 @@ class TestHyperparameterOptimization:
 
         # With these parameters, twojmax should always come out as 6.
         assert hyperoptimizer.params.descriptors.bispectrum_twojmax == 6
+
+    def test_naswot_eigenvalues(self):
+        test_parameters = mala.Parameters()
+        test_parameters.manual_seed = 1234
+        test_parameters.data.data_splitting_type = "by_snapshot"
+        test_parameters.data.input_rescaling_type = "feature-wise-standard"
+        test_parameters.data.output_rescaling_type = "normal"
+        test_parameters.running.max_number_epochs = 10
+        test_parameters.running.mini_batch_size = 40
+        test_parameters.running.learning_rate = 0.00001
+        test_parameters.running.trainingtype = "Adam"
+        test_parameters.hyperparameters.n_trials = 8
+        test_parameters.hyperparameters.hyper_opt_method = "naswot"
+
+        data_handler = mala.DataHandler(test_parameters)
+
+        data_handler.add_snapshot("Be_snapshot0.in.npy", data_path,
+                                  "Be_snapshot0.out.npy", data_path, "tr")
+        data_handler.add_snapshot("Be_snapshot1.in.npy", data_path,
+                                  "Be_snapshot1.out.npy", data_path, "va")
+        data_handler.prepare_data()
+
+        test_hp_optimizer = mala.HyperOptNASWOT(test_parameters, data_handler)
+        test_parameters.network.layer_sizes = [data_handler.input_dimension,
+                                               100, 100,
+                                               data_handler.output_dimension]
+        test_hp_optimizer.add_hyperparameter("categorical",
+                                             "layer_activation_00",
+                                             choices=["ReLU", "Sigmoid"])
+        test_hp_optimizer.add_hyperparameter("categorical",
+                                             "layer_activation_01",
+                                             choices=["ReLU", "Sigmoid"])
+        test_hp_optimizer.add_hyperparameter("categorical",
+                                             "layer_activation_02",
+                                             choices=["ReLU", "Sigmoid"])
+        test_hp_optimizer.perform_study()
+        correct_trial_list = [10569.71875, 10649.0361328125, 12081.2958984375,
+                              12360.3701171875, 33523.9375, 47565.8203125,
+                              149152.921875, 150312.671875]
+        for idx, trial in enumerate(correct_trial_list):
+            assert np.isclose(trial, test_hp_optimizer.trial_losses[idx],
+                              rtol=naswot_accuracy)
 
     @staticmethod
     def __optimize_hyperparameters(hyper_optimizer):

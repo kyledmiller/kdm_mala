@@ -1,5 +1,6 @@
 """Base class for all descriptor calculators."""
 from abc import abstractmethod
+import os
 
 import ase
 from ase.units import m
@@ -7,8 +8,9 @@ import numpy as np
 
 from mala.common.parameters import ParametersDescriptors, Parameters
 from mala.common.parallelizer import get_comm, printout, get_rank, get_size, \
-    barrier, parallel_warn
+    barrier, parallel_warn, set_lammps_instance
 from mala.common.physical_data import PhysicalData
+from mala.descriptors.lammps_utils import set_cmdlinevars
 
 
 class Descriptor(PhysicalData):
@@ -28,7 +30,7 @@ class Descriptor(PhysicalData):
     # Constructors
     ##############################
 
-    def __new__(cls, params: Parameters):
+    def __new__(cls, params: Parameters=None):
         """
         Create a Descriptor instance.
 
@@ -62,12 +64,34 @@ class Descriptor(PhysicalData):
                 descriptors = super(Descriptor, AtomicDensity).\
                     __new__(AtomicDensity)
 
+            if params.descriptors.descriptor_type == "MinterpyDescriptors":
+                from mala.descriptors.minterpy_descriptors import \
+                    MinterpyDescriptors
+                descriptors = super(Descriptor, MinterpyDescriptors).\
+                    __new__(MinterpyDescriptors)
+
             if descriptors is None:
                 raise Exception("Unsupported descriptor calculator.")
         else:
             descriptors = super(Descriptor, cls).__new__(cls)
 
+        # For pickling
+        setattr(descriptors, "params_arg", params)
         return descriptors
+
+    def __getnewargs__(self):
+        """
+        Get the necessary arguments to call __new__.
+
+        Used for pickling.
+
+
+        Returns
+        -------
+        params : mala.Parameters
+            The parameters object with which this object was created.
+        """
+        return self.params_arg,
 
     def __init__(self, parameters):
         super(Descriptor, self).__init__(parameters)
@@ -332,7 +356,7 @@ class Descriptor(PhysicalData):
                 for i in range(0, get_size()):
                     all_descriptors_list.append(
                         np.empty(sendcounts[i] * raw_feature_length,
-                                 dtype=np.float64))
+                                 dtype=descriptors_np.dtype))
 
                 # No MPI necessary for first rank. For all the others,
                 # collect the buffers.
@@ -493,12 +517,25 @@ class Descriptor(PhysicalData):
         else:
             return 0
 
-    def _setup_lammps_processors(self, nx, ny, nz):
+    def _setup_lammps(self, nx, ny, nz, outdir, lammps_dict,
+                      log_file_name="lammps_log.tmp"):
         """
         Set up the lammps processor grid.
 
         Takes into account y/z-splitting.
         """
+        from lammps import lammps
+
+        if self.parameters._configuration["mpi"] and \
+           self.parameters._configuration["gpu"]:
+            raise Exception("LAMMPS can currently only work with multiple "
+                            "ranks or GPU on one rank - but not multiple GPUs "
+                            "across ranks.")
+
+        # Build LAMMPS arguments from the data we read.
+        lmp_cmdargs = ["-screen", "none", "-log",
+                       os.path.join(outdir, log_file_name)]
+
         if self.parameters._configuration["mpi"]:
             size = get_size()
             # for parallel tem need to set lammps commands: processors and
@@ -598,13 +635,14 @@ class Descriptor(PhysicalData):
                     #     zvals = ((i+1+zrem)*zcut)-0.00000001
                     #     zint += format(zvals, ".8f")
                     #     zint += ' '
-                lammps_dict = {"lammps_procs": f"processors {lammps_procs} "
-                                               f"map xyz",
-                               "zbal": f"balance 1.0 y {yint} z {zint}",
-                               "ngridx": nx,
-                               "ngridy": ny,
-                               "ngridz": nz,
-                               "switch": self.parameters.bispectrum_switchflag}
+                lammps_dict["lammps_procs"] = f"processors {lammps_procs} " \
+                                              f"map xyz"
+                lammps_dict["zbal"] = f"balance 1.0 y {yint} z {zint}"
+                lammps_dict["ngridx"] = nx
+                lammps_dict["ngridy"] = ny
+                lammps_dict["ngridz"] = nz
+                lammps_dict["switch"] = self.parameters.bispectrum_switchflag
+
             else:
                 if self.parameters.use_z_splitting:
                     # when nyfft is not used only split processors along z axis
@@ -650,25 +688,47 @@ class Descriptor(PhysicalData):
                             zvals = (((i+1)*int(nz/zprocs)+zrem)*zcut)-0.00000001
                             zint += format(zvals, ".8f")
                             zint += ' '
-                    lammps_dict = {"lammps_procs":
-                                   f"processors {lammps_procs}",
-                                   "zbal": f"balance 1.0 z {zint}",
-                                   "ngridx": nx,
-                                   "ngridy": ny,
-                                   "ngridz": nz,
-                                   "switch": self.parameters.bispectrum_switchflag}
+
+                    lammps_dict["lammps_procs"] = f"processors {lammps_procs}"
+                    lammps_dict["zbal"] = f"balance 1.0 z {zint}"
+                    lammps_dict["ngridx"] = nx
+                    lammps_dict["ngridy"] = ny
+                    lammps_dict["ngridz"] = nz
+                    lammps_dict[
+                        "switch"] = self.parameters.bispectrum_switchflag
+
                 else:
-                    lammps_dict = {"ngridx": nx,
-                                   "ngridy": ny,
-                                   "ngridz": nz,
-                                   "switch": self.parameters.bispectrum_switchflag}
+                    lammps_dict["ngridx"] = nx
+                    lammps_dict["ngridy"] = ny
+                    lammps_dict["ngridz"] = nz
+                    lammps_dict[
+                        "switch"] = self.parameters.bispectrum_switchflag
 
         else:
-            lammps_dict = {"ngridx": nx,
-                           "ngridy": ny,
-                           "ngridz": nz,
-                           "switch": self.parameters.bispectrum_switchflag}
-        return lammps_dict
+            lammps_dict["ngridx"] = nx
+            lammps_dict["ngridy"] = ny
+            lammps_dict["ngridz"] = nz
+            lammps_dict[
+                "switch"] = self.parameters.bispectrum_switchflag
+            if self.parameters._configuration["gpu"]:
+                # Tell Kokkos to use one GPU.
+                lmp_cmdargs.append("-k")
+                lmp_cmdargs.append("on")
+                lmp_cmdargs.append("g")
+                lmp_cmdargs.append("1")
+
+                # Tell LAMMPS to use Kokkos versions of those commands for
+                # which a Kokkos version exists.
+                lmp_cmdargs.append("-sf")
+                lmp_cmdargs.append("kk")
+                pass
+
+        lmp_cmdargs = set_cmdlinevars(lmp_cmdargs, lammps_dict)
+
+        lmp = lammps(cmdargs=lmp_cmdargs)
+        set_lammps_instance(lmp)
+
+        return lmp
 
     @abstractmethod
     def _calculate(self, atoms, outdir, grid_dimensions, **kwargs):

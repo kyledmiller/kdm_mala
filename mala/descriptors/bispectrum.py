@@ -92,7 +92,8 @@ class Bispectrum(Descriptor):
 
     def _calculate(self, atoms, outdir, grid_dimensions, **kwargs):
         """Perform actual bispectrum calculation."""
-        from lammps import lammps
+        use_fp64 = kwargs.get("use_fp64", False)
+
         lammps_format = "lammps-data"
         ase_out_path = os.path.join(outdir, "lammps_input.tmp")
         ase.io.write(ase_out_path, atoms, format=lammps_format)
@@ -101,22 +102,13 @@ class Bispectrum(Descriptor):
         ny = grid_dimensions[1]
         nz = grid_dimensions[2]
 
-        # Build LAMMPS arguments from the data we read.
-        lmp_cmdargs = ["-screen", "none", "-log",
-                       os.path.join(outdir, "lammps_bgrid_log.tmp")]
-
-        # LAMMPS processor grid filled by parent class.
-        lammps_dict = self._setup_lammps_processors(nx, ny, nz)
-
-        # Set the values not already filled in the LAMMPS setup.
+        # Create LAMMPS instance.
+        lammps_dict = {}
         lammps_dict["twojmax"] = self.parameters.bispectrum_twojmax
         lammps_dict["rcutfac"] = self.parameters.bispectrum_cutoff
         lammps_dict["atom_config_fname"] = ase_out_path
-
-        lmp_cmdargs = set_cmdlinevars(lmp_cmdargs, lammps_dict)
-
-        # Build the LAMMPS object.
-        lmp = lammps(cmdargs=lmp_cmdargs)
+        lmp = self._setup_lammps(nx, ny, nz, outdir, lammps_dict,
+                                 log_file_name="lammps_bgrid_log.tmp")
 
         # An empty string means that the user wants to use the standard input.
         # What that is differs depending on serial/parallel execution.
@@ -165,37 +157,28 @@ class Bispectrum(Descriptor):
             snap_descriptors_np = \
                 extract_compute_np(lmp, "bgridlocal",
                                    lammps_constants.LMP_STYLE_LOCAL, 2,
-                                   array_shape=(nrows_local, ncols_local))
+                                   array_shape=(nrows_local, ncols_local),
+                                   use_fp64=use_fp64)
+            lmp.close()
 
             # Copy the grid dimensions only at the end.
             self.grid_dimensions = [nx, ny, nz]
-
-            # If I directly return the descriptors, this sometimes leads
-            # to errors, because presumably the python garbage collection
-            # deallocates memory too quickly. This copy is more memory
-            # hungry, and we might have to tackle this later on, but
-            # for now it works.
-            return snap_descriptors_np.copy(), nrows_local
+            return snap_descriptors_np, nrows_local
 
         else:
             # Extract data from LAMMPS calculation.
             snap_descriptors_np = \
                 extract_compute_np(lmp, "bgrid", 0, 2,
-                                   (nz, ny, nx, self.fingerprint_length))
+                                   (nz, ny, nx, self.fingerprint_length),
+                                   use_fp64=use_fp64)
+            lmp.close()
+
             # switch from x-fastest to z-fastest order (swaps 0th and 2nd
             # dimension)
             snap_descriptors_np = snap_descriptors_np.transpose([2, 1, 0, 3])
             # Copy the grid dimensions only at the end.
             self.grid_dimensions = [nx, ny, nz]
-            # If I directly return the descriptors, this sometimes leads
-            # to errors, because presumably the python garbage collection
-            # deallocates memory too quickly. This copy is more memory
-            # hungry, and we might have to tackle this later on, but
-            # for now it works.
-            # I thought the transpose would take care of that, but apparently
-            # it does not necessarily do that - so we have do go down
-            # that route.
             if self.parameters.descriptors_contain_xyz:
-                return snap_descriptors_np.copy(), nx*ny*nz
+                return snap_descriptors_np, nx*ny*nz
             else:
-                return snap_descriptors_np[:, :, :, 3:].copy(), nx*ny*nz
+                return snap_descriptors_np[:, :, :, 3:], nx*ny*nz
