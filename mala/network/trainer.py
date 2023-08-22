@@ -233,7 +233,7 @@ class Trainer(Runner):
         if self.parameters_full.use_horovod:
             vloss = self.__average_validation(vloss, 'average_loss')
             self.initial_validation_loss = vloss
-            if self.data.test_data_set is not None:
+            if self.data.test_data_sets:
                 tloss = self.__average_validation(tloss, 'average_loss')
                 self.initial_test_loss = tloss
 
