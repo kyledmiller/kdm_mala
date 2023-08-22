@@ -30,7 +30,7 @@ class DataHandlerBase(ABC):
     """
 
     def __init__(self, parameters: Parameters, target_calculator=None,
-                 descriptor_calculator=None):
+                 descriptor_calculator=None, from_arrays_dict=None):
         self.parameters: ParametersData = parameters.data
         self.use_horovod = parameters.use_horovod
 
@@ -143,7 +143,7 @@ class DataHandlerBase(ABC):
     # Loading data
     ######################
 
-    def _check_snapshots(self, comm=None):
+    def _check_snapshots(self, from_arrays_dict=None, comm=None):
         """Check the snapshots for consistency."""
         self.nr_snapshots = len(self.parameters.snapshot_directories_list)
 
@@ -206,16 +206,25 @@ class DataHandlerBase(ABC):
 
             printout("Checking targets file ", snapshot.output_npy_file, "at",
                      snapshot.output_npy_directory, min_verbosity=1)
-            if snapshot.snapshot_type == "numpy":
-                tmp_dimension = self.target_calculator. \
+            if from_arrays_dict is not None:
+                tmp_dimension = from_arrays_dict[(i, 'outputs')]\
+                    [:,self.target_calculator._feature_mask():].shape
+                # We don't need any reference to full grid dim at this point
+                # so this is just for compatibility w other code
+                if len(tmp_dimension) > 2: 
+                    raise ValueError('Flatten the data pool arrays.')
+                tmp_dimension = (tmp_dimension[0], 1, 1, tmp_dimension[-1])
+            elif snapshot.snapshot_type == "numpy":
+                tmp_dimension = self.target_calculator.\
                     read_dimensions_from_numpy_file(
                     os.path.join(snapshot.output_npy_directory,
-                                 snapshot.output_npy_file))
+                                 snapshot.output_npy_file))#,
+                    #selection_mask=snapshot._selection_mask)
             elif snapshot.snapshot_type == "openpmd":
-                tmp_dimension = self.target_calculator. \
+                tmp_dimension = self.target_calculator.\
                     read_dimensions_from_openpmd_file(
                     os.path.join(snapshot.output_npy_directory,
-                                 snapshot.output_npy_file), comm=comm)
+                                 snapshot.output_npy_file))
             else:
                 raise Exception("Unknown snapshot file type.")
 
@@ -229,8 +238,6 @@ class DataHandlerBase(ABC):
                     raise Exception("Invalid snapshot entered at ", snapshot.
                                     output_npy_file)
 
-            if np.prod(tmp_dimension[0:3]) != snapshot.grid_size:
-                raise Exception("Inconsistent snapshot data provided.")
-
             if firstsnapshot:
-                firstsnapshot = False
+                firstsnapshot = False                
+
