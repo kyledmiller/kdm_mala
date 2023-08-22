@@ -149,32 +149,51 @@ class DataHandlerBase(ABC):
 
         # Read the snapshots using a memorymap to see if there is consistency.
         firstsnapshot = True
-        for snapshot in self.parameters.snapshot_directories_list:
+        for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
             ####################
             # Descriptors.
-            ####################
+            ####################            
 
             printout("Checking descriptor file ", snapshot.input_npy_file,
                      "at", snapshot.input_npy_directory, min_verbosity=1)
-            if snapshot.snapshot_type == "numpy":
-                tmp_dimension = self.descriptor_calculator. \
+            if from_arrays_dict is not None:
+                printout(f'arrdim:   {from_arrays_dict[(i, "inputs")].shape}', min_verbosity=2)
+                printout(f'featmask: {self.descriptor_calculator._feature_mask()}', min_verbosity=2)
+                tmp_dimension = from_arrays_dict[(i, 'inputs')]\
+                    [:,self.descriptor_calculator._feature_mask():].shape
+                # We don't need any reference to full grid dim at this point
+                # so this is just for compatibility w other code
+                if len(tmp_dimension) > 2: 
+                    raise ValueError('Flatten the data pool arrays.')
+                tmp_dimension = (tmp_dimension[0], 1, 1, tmp_dimension[-1])
+                printout(f"from_arrays_dict dim {i}: {from_arrays_dict[(i, 'inputs')].shape}")
+            elif snapshot.snapshot_type == "numpy":
+                tmp_dimension = self.descriptor_calculator.\
                     read_dimensions_from_numpy_file(
                     os.path.join(snapshot.input_npy_directory,
-                                 snapshot.input_npy_file))
+                                 snapshot.input_npy_file)) 
             elif snapshot.snapshot_type == "openpmd":
-                tmp_dimension = self.descriptor_calculator. \
+                tmp_dimension = self.descriptor_calculator.\
                     read_dimensions_from_openpmd_file(
                     os.path.join(snapshot.input_npy_directory,
                                  snapshot.input_npy_file), comm=comm)
             else:
                 raise Exception("Unknown snapshot file type.")
-
+            
             # get the snapshot feature dimension - call it input dimension
             # for flexible grid sizes only this need be consistent
             tmp_input_dimension = tmp_dimension[-1]
             tmp_grid_dim = tmp_dimension[0:3]
+            
+            # If using selection_mask, apply to dimensions 
+            if snapshot._selection_mask is not None:
+                tmp_grid_dim = (sum(snapshot._selection_mask),1,1)
+            
+            printout(f'tmp_input_dim {i}: {tmp_input_dimension}', min_verbosity=2)
+            printout(f'tmp_grid_dim {i}:  {tmp_grid_dim}', min_verbosity=2)
             snapshot.grid_dimension = tmp_grid_dim
-            snapshot.grid_size = int(np.prod(snapshot.grid_dimension))
+            snapshot.grid_size = int(np.prod(tmp_grid_dim))            
+            printout(f'grid_size: {snapshot.grid_size}', min_verbosity=2)
             if firstsnapshot:
                 self.input_dimension = tmp_input_dimension
             else:

@@ -22,7 +22,7 @@ import time
 
 from pprint import pprint
 
-class DataHandler:
+class DataHandler(DataHandlerBase):
     """
     Loads and scales data. Can only process numpy arrays at the moment.
 
@@ -32,6 +32,8 @@ class DataHandler:
     Parameters
     ----------
     parameters : mala.common.parameters.Parameters
+        Parameters used to create the data handling object.
+
     descriptor_calculator : mala.descriptors.descriptor.Descriptor
         Used to do unit conversion on input data. If None, then one will
         be created by this class.
@@ -96,11 +98,6 @@ class DataHandler:
         self.input_dimension = 0
         self.output_dimension = 0
         self.nr_snapshots = 0
-
-        # clustering still needs uniform grids
-        if self.parameters.use_clustering:
-            self.grid_dimension = [0, 0, 0]
-            self.grid_size = 0
 
         # Actual data points in the different categories.
         self.nr_training_data = 0
@@ -613,105 +610,7 @@ class DataHandler:
 
     def __check_snapshots(self, from_arrays_dict=None):
         """Check the snapshots for consistency."""
-        self.nr_snapshots = len(self.parameters.snapshot_directories_list)
-
-        # Read the snapshots using a memorymap to see if there is consistency.
-        firstsnapshot = True
-        for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
-            ####################
-            # Descriptors.
-            ####################            
-
-            printout("Checking descriptor file ", snapshot.input_npy_file,
-                     "at", snapshot.input_npy_directory, min_verbosity=1)
-            if from_arrays_dict is not None:
-                print(f'arrdim:   {from_arrays_dict[(i, "inputs")].shape}')
-                print(f'featmask: {self.descriptor_calculator._feature_mask()}')
-                tmp_dimension = from_arrays_dict[(i, 'inputs')]\
-                    [:,self.descriptor_calculator._feature_mask():].shape
-                # We don't need any reference to full grid dim at this point
-                # so this is just for compatibility w other code
-                if len(tmp_dimension) > 2: 
-                    raise ValueError('Flatten the data pool arrays.')
-                tmp_dimension = (tmp_dimension[0], 1, 1, tmp_dimension[-1])
-                printout(f"from_arrays_dict dim {i}: {from_arrays_dict[(i, 'inputs')].shape}")
-            elif snapshot.snapshot_type == "numpy":
-                tmp_dimension = self.descriptor_calculator.\
-                    read_dimensions_from_numpy_file(
-                    os.path.join(snapshot.input_npy_directory,
-                                 snapshot.input_npy_file))#, 
-                    #selection_mask=snapshot._selection_mask)
-            elif snapshot.snapshot_type == "openpmd":
-                tmp_dimension = self.descriptor_calculator.\
-                    read_dimensions_from_openpmd_file(
-                    os.path.join(snapshot.input_npy_directory,
-                                 snapshot.input_npy_file))
-            else:
-                raise Exception("Unknown snapshot file type.")
-            
-            # get the snapshot feature dimension - call it input dimension
-            # for flexible grid sizes only this need be consistent
-            tmp_input_dimension = tmp_dimension[-1]
-            tmp_grid_dim = tmp_dimension[0:3]
-            
-            # If using selection_mask, apply to dimensions 
-            if snapshot._selection_mask is not None:
-                tmp_grid_dim = (sum(snapshot._selection_mask),1,1)
-            
-            print(f'tmp_input_dim {i}: {tmp_input_dimension}')
-            print(f'tmp_grid_dim {i}:  {tmp_grid_dim}')
-            snapshot.grid_dimension = tmp_grid_dim
-            snapshot.grid_size = int(np.prod(tmp_grid_dim))            
-            printout(f'grid_size: {snapshot.grid_size}')
-            if firstsnapshot:
-                self.input_dimension = tmp_input_dimension
-                if self.parameters.use_clustering:
-                    self.grid_dimension[0:3] = tmp_grid_dim[0:3]
-                    self.grid_size = np.prod(self.grid_dimension)
-            else:
-                if self.input_dimension != tmp_input_dimension:
-                    raise Exception("Invalid snapshot entered at ", snapshot.
-                                    input_npy_file)
-            ####################
-            # Targets.
-            ####################
-
-            printout("Checking targets file ", snapshot.output_npy_file, "at",
-                     snapshot.output_npy_directory, min_verbosity=1)
-            if from_arrays_dict is not None:
-                tmp_dimension = from_arrays_dict[(i, 'outputs')]\
-                    [:,self.target_calculator._feature_mask():].shape
-                # We don't need any reference to full grid dim at this point
-                # so this is just for compatibility w other code
-                if len(tmp_dimension) > 2: 
-                    raise ValueError('Flatten the data pool arrays.')
-                tmp_dimension = (tmp_dimension[0], 1, 1, tmp_dimension[-1])
-            elif snapshot.snapshot_type == "numpy":
-                tmp_dimension = self.target_calculator.\
-                    read_dimensions_from_numpy_file(
-                    os.path.join(snapshot.output_npy_directory,
-                                 snapshot.output_npy_file))#,
-                    #selection_mask=snapshot._selection_mask)
-            elif snapshot.snapshot_type == "openpmd":
-                tmp_dimension = self.target_calculator.\
-                    read_dimensions_from_openpmd_file(
-                    os.path.join(snapshot.output_npy_directory,
-                                 snapshot.output_npy_file))
-            else:
-                raise Exception("Unknown snapshot file type.")
-
-            # The first snapshot determines the data size to be used.
-            # We need to make sure that snapshot size is consistent.
-            tmp_output_dimension = tmp_dimension[-1]
-            if firstsnapshot:
-                self.output_dimension = tmp_output_dimension
-            else:
-                if self.output_dimension != tmp_output_dimension:
-                    raise Exception("Invalid snapshot entered at ", snapshot.
-                                    output_npy_file)
-                
-            if firstsnapshot:
-                firstsnapshot = False                
+        super(DataHandler, self)._check_snapshots(from_arrays_dict)
 
         # Now we need to confirm that the snapshot list has some inner
         # consistency.
