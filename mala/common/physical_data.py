@@ -263,7 +263,7 @@ class PhysicalData(ABC):
         read_dtype : bool
             If True, the dtype is read alongside the dimensions.
         """
-        loaded_array = np.load(path, mmap_mode="r+")
+       	loaded_array = np.load(path, mmap_mode="r")
         if selection_mask is not None:
             original_dims = loaded_array.shape
             loaded_array = loaded_array.reshape((-1, 1, 1, original_dims[-1]))[selection_mask]
