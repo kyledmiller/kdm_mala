@@ -122,13 +122,23 @@ class Snapshot(JSONSerializable):
             The object as read from the JSON file.
 
         """
-        deserialized_object = cls(json_dict["input_npy_file"],
-                                  json_dict["input_npy_directory"],
-                                  json_dict["output_npy_file"],
-                                  json_dict["output_npy_directory"],
-                                  json_dict["snapshot_function"],
-                                  json_dict["snapshot_type"],
-                                  json_dict["selection_mask"])
+        ### Temporary try,except for compatibility with 
+        ### pre-selection_mask parameter dicts TODO-remove
+        try:
+            deserialized_object = cls(json_dict["input_npy_file"],
+                                      json_dict["input_npy_directory"],
+                                      json_dict["output_npy_file"],
+                                      json_dict["output_npy_directory"],
+                                      json_dict["snapshot_function"],
+                                      json_dict["snapshot_type"],
+                                      json_dict["selection_mask"])
+        except:
+            deserialized_object = cls(json_dict["input_npy_file"],
+                                      json_dict["input_npy_directory"],
+                                      json_dict["output_npy_file"],
+                                      json_dict["output_npy_directory"],
+                                      json_dict["snapshot_function"],
+                                      json_dict["snapshot_type"])
         for key in json_dict:
             setattr(deserialized_object, key, json_dict[key])
         return deserialized_object
