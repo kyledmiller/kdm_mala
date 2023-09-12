@@ -354,7 +354,7 @@ class DataHandler(DataHandlerBase):
             # but in the number of datasets, we also need to multiply by that.
 
             for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
-                print(f'Snapshot {i}: {snapshot.grid_size}')
+                printout(f'Snapshot {i}: {snapshot.grid_size}', min_verbosity=3)
                 if snapshot.snapshot_function == "tr":
                     self.nr_training_snapshots += 1
                     self.nr_training_data += snapshot.grid_size
@@ -411,7 +411,7 @@ class DataHandler(DataHandlerBase):
                              from_arrays_dict=from_arrays_dict)
             self.__load_data(expand_partition_name[partition], "outputs", 
                              from_arrays_dict=from_arrays_dict)
-        printout(f'ttt refresh:                          {time.time()-start}s')
+        printout(f'ttt refresh:                          {time.time()-start}s', min_verbosity=3)
 
         # After the loading is done, target data can safely be saved again.
         self.target_calculator.save_target_data = True
@@ -419,7 +419,7 @@ class DataHandler(DataHandlerBase):
         printout("Build datasets.", min_verbosity=1)
         self.__build_datasets(from_arrays_dict=from_arrays_dict)
         printout("Build dataset: Done.", min_verbosity=0)
-        printout(f'ttt build_dataset:                    {time.time()-start}s')
+        printout(f'ttt build_dataset:                    {time.time()-start}s', min_verbosity=3)
 
         # Wait until all ranks are finished with data preparation.
         # It is not uncommon that ranks might be asynchronous in their
@@ -621,7 +621,6 @@ class DataHandler(DataHandlerBase):
             # As we are not actually interested in the number of snapshots,
             # but in the number of datasets, we also need to multiply by that.
             for snapshot in self.parameters.snapshot_directories_list:
-                print(snapshot.snapshot_function)
                 if snapshot.snapshot_function == "tr":
                     self.nr_training_snapshots += 1
                     self.nr_training_data += snapshot.grid_size
@@ -731,7 +730,7 @@ class DataHandler(DataHandlerBase):
         snapshot_counter = 0
         gs_old = 0
 
-        print(f'ttt load_data_{function} 0 initialize:   {time.time() - start}')
+        printout(f'ttt load_data_{function} 0 initialize:   {time.time() - start}', min_verbosity=3)
 
         for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
             mid = time.time()
@@ -753,22 +752,12 @@ class DataHandler(DataHandlerBase):
                 # Pull from existing array rather than file
                 if from_arrays_dict is not None:
                     if snapshot._selection_mask is not None: gs_new = sum(snapshot._selection_mask)
-                    print(f'gs_new {i}: {gs_new}')
-                    print(f'Fastloaded {i}, {data_type}: {from_arrays_dict[(i, data_type)].shape}')# -  {from_arrays_dict[(i, data_type)]}')
-                    print(f'selmask -> {gs_new}')
-                    print(f'indices: {gs_old}:{gs_old+gs_new} in {getattr(self,array).shape}')
+                    #printout(f'gs_new {i}: {gs_new}', min_verbosity=2)
+                    printout(f'Fastloaded {i}, {data_type}: {from_arrays_dict[(i, data_type)].shape}', min_verbosity=3)# -  {from_arrays_dict[(i, data_type)]}')
+                    #printout(f'selmask -> {gs_new} {snapshot._selection_mask}', min_verbosity=2)
+                    #printout(f'indices: {gs_old}:{gs_old+gs_new} in {getattr(self,array).shape}', min_verbosity=2)
                     #print(f'units = {units}')
-                    #arr0 = from_arrays_dict[(i, data_type)]
-                    #print(f'arr0 {arr0.shape}')#:  {arr0}')
-                    #arr1 = from_arrays_dict[(i, data_type)][:, calculator._feature_mask():]
-                    #print(f'arr1 {arr1.shape}')#:  {arr1}')
-                    #if snapshot._selection_mask is not None:
-                    #    arr2 = from_arrays_dict[(i, data_type)][:, calculator._feature_mask():][snapshot._selection_mask]
-                    #    print(f'arr2 {arr2.shape}')#:  {arr1}')
-                    #    del arr2
-                    #del arr0, arr1
                     #calculator._process_loaded_array(from_arrays_dict[i][:, :, :, calculator._feature_mask():][snapshot._selection_mask], units=units)
-                    #print(f'arr2 {arr1.shape}:  {arr1}')
 
                     #TODO streamline this
                     if snapshot._selection_mask is not None:
@@ -798,12 +787,12 @@ class DataHandler(DataHandlerBase):
                                 [:, calculator._feature_mask():]
 
 
-                    print(f'ttt load_data 1 existing_assign:                   {time.time() - mid}')
+                    printout(f'ttt load_data 1 existing_assign:                   {time.time() - mid}', min_verbosity=3)
                     mid = time.time()
 
                     calculator._process_loaded_array(getattr(self,array)[gs_old : gs_old + gs_new, :], units=units)
                     
-                    print(f'ttt load_data 2 existing_process:                  {time.time() - mid}')
+                    printout(f'ttt load_data 2 existing_process:                  {time.time() - mid}', min_verbosity=3)
                     mid = time.time()
 
                     #print(f'Fastloaded: {getattr(self,array)[gs_old : gs_old + gs_new, :].shape} {getattr(self,array)[gs_old : gs_old + gs_new, :]}')
@@ -839,6 +828,7 @@ class DataHandler(DataHandlerBase):
                 if function == "training":
                     self.training_data_inputs = torch.\
                         from_numpy(self.training_data_inputs).float()
+                    printout(f'DDDD loaded tensor: \t{getattr(self,array).size()}', min_verbosity=3)
 
                 if function == "validation":
                     self.validation_data_inputs = torch.\
@@ -861,8 +851,10 @@ class DataHandler(DataHandlerBase):
                     self.test_data_outputs = torch.\
                         from_numpy(self.test_data_outputs).float()
 
-            print(f'ttt load_data 3 existing_tensorize:      {time.time() - mid}')
-            print(f'tttt load_data 4 total:                  {time.time() - start}')
+            printout(f'ttt load_data 3 existing_tensorize:      {time.time() - mid}', min_verbosity=3)
+            printout(f'tttt load_data 4 total:                  {time.time() - start}', min_verbosity=3)
+        printout(f'loaded tensor shape {array}: \t{getattr(self,array).size()}', min_verbosity=3)
+        printout(f'loaded selection_mask: \t{snapshot._selection_mask}', min_verbosity=3)
                 
     def __build_datasets(self, from_arrays_dict=None):
         """Build the DataSets that are used during training."""
@@ -977,6 +969,8 @@ class DataHandler(DataHandlerBase):
         printout(f'# training data:   {self.nr_training_data}', min_verbosity=2)
         printout(f'# validation data: {self.nr_validation_data}', min_verbosity=2)
         printout(f'# testing data:    {self.nr_test_data}', min_verbosity=2)
+        if self.training_data_inputs.size(dim=0) < 16:
+            printout(f'Post-build_datasets   {self.training_data_inputs[:,0]}', min_verbosity=3)
 
     # Scaling
     ######################
