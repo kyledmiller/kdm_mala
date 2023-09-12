@@ -166,7 +166,7 @@ class DataHandlerBase(ABC):
                 if len(tmp_dimension) > 2: 
                     raise ValueError('Flatten the data pool arrays.')
                 tmp_dimension = (tmp_dimension[0], 1, 1, tmp_dimension[-1])
-                printout(f"from_arrays_dict dim {i}: {from_arrays_dict[(i, 'inputs')].shape}")
+                printout(f"from_arrays_dict dim {i}: {from_arrays_dict[(i, 'inputs')].shape}", min_verbosity=2)
             elif snapshot.snapshot_type == "numpy":
                 tmp_dimension = self.descriptor_calculator.\
                     read_dimensions_from_numpy_file(
