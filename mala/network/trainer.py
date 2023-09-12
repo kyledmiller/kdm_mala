@@ -325,6 +325,8 @@ class Trainer(Runner):
                 batchid = 0
                 for loader in self.training_data_loaders:
                     for (inputs, outputs) in loader:
+                        ### DEBUG
+                        printout(f'DDDD input from loaders:  {inputs[:,0]}', min_verbosity=3)
 
                         if batchid == self.parameters.profiler_range[0]:
                             torch.cuda.profiler.start()
@@ -671,13 +673,13 @@ class Trainer(Runner):
                                                          mini_batch_size * 1,
                                                          sampler=self.test_sampler,
                                                          **kwargs))
+        printout(f'DDDD Post-preptrain: {self.test_data_loaders[0].dataset[:]}', min_verbosity=3)
 
     def __process_mini_batch(self, network, input_data, target_data):
         """Process a mini batch."""
             
         ### DEBUG
-        #printout(f'DDDD input_data: \n {input_data[:,0]}')
-        #printout(f'DDDD input_data sum: {torch.sum(input_data)}')
+        printout(f'DDDD input_data: \n {input_data[:,0]}', min_verbosity=3)
  
         if self.parameters._configuration["gpu"]:
             if self.parameters.use_graphs and self.train_graph is None:
