@@ -354,6 +354,8 @@ class DataHandler(DataHandlerBase):
             # but in the number of datasets, we also need to multiply by that.
 
             for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
+                if snapshot._selection_mask: 
+                    snapshot.grid_size = sum(snapshot._selection_mask)
                 printout(f'Snapshot {i}: {snapshot.grid_size}', min_verbosity=3)
                 if snapshot.snapshot_function == "tr":
                     self.nr_training_snapshots += 1
