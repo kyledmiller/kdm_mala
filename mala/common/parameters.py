@@ -1453,6 +1453,49 @@ class Parameters:
         self.running._update_device(device_temp)
         self.hyperparameters._update_device(device_temp)
 
+
+    @classmethod
+    def load_from_dict(cls, param_dict, no_snapshots=False):
+        """
+        Load a Parameters object from a file.
+
+        Parameters
+        ----------
+        param_dict : dictionary
+            Dictionary containing parameters to be loaded
+
+        no_snapshots : bool
+            If True, than the snapshot list will be emptied. Useful when
+            performing inference/testing after training a network.
+
+        Returns
+        -------
+        loaded_parameters : Parameters
+            The loaded Parameters object.
+
+        """
+        loaded_parameters = cls()
+        for key in param_dict:
+            if isinstance(param_dict[key], dict) and key \
+                    != "openpmd_configuration":
+                # These are the other parameter classes.
+                sub_parameters =\
+                    globals()[param_dict[key]["_parameters_type"]].\
+                    from_json(param_dict[key])
+                setattr(loaded_parameters, key, sub_parameters)
+
+        # We iterate a second time, to set global values, so that they
+        # are properly forwarded.
+        for key in param_dict:
+            if not isinstance(param_dict[key], dict) or key == \
+                    "openpmd_configuration":
+                setattr(loaded_parameters, key, param_dict[key])
+        if no_snapshots is True:
+            loaded_parameters.data.snapshot_directories_list = []
+
+        return loaded_parameters
+
+
     @classmethod
     def load_from_file(cls, file, save_format="json",
                        no_snapshots=False):
