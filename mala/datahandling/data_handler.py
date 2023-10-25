@@ -339,6 +339,10 @@ class DataHandler(DataHandlerBase):
         # may create copies in memory.
         self.target_calculator.save_target_data = False
         
+        printout("Checking the snapshots and your inputs for consistency.",
+                 min_verbosity=1)
+        self.__check_snapshots(from_arrays_dict=from_arrays_dict)
+        printout("Consistency check successful.", min_verbosity=0)
          
         # Reallocate arrays for data storage
         start = time.time()
@@ -354,8 +358,8 @@ class DataHandler(DataHandlerBase):
             # but in the number of datasets, we also need to multiply by that.
 
             for i, snapshot in enumerate(self.parameters.snapshot_directories_list):
-                if snapshot._selection_mask: 
-                    snapshot.grid_size = sum(snapshot._selection_mask)
+                #if snapshot._selection_mask: 
+                #    snapshot.grid_size = sum(snapshot._selection_mask)
                 printout(f'Snapshot {i}: {snapshot.grid_size}', min_verbosity=3)
                 if snapshot.snapshot_function == "tr":
                     self.nr_training_snapshots += 1
